@@ -1,6 +1,7 @@
--- awake: time changes
+-- awake-mx.samples: time changes
 -- 2.4.0 @tehn
--- llllllll.co/t/21022
+-- mx.samples @infinitedigits
+-- plumbing @tomw
 --
 -- top loop plays notes
 -- transposed by bottom loop
@@ -30,7 +31,9 @@
 -- *toggle
 -- E2/E3 changes
 
-engine.name = 'PolyPerc'
+mxsamples=include("mx.samples/lib/mx.samples")
+engine.name="MxSamples"
+skeys=mxsamples:new()
 
 hs = include('lib/halfsecond')
 
@@ -101,9 +104,13 @@ local active_notes = {}
 local edit_ch = 1
 local edit_pos = 1
 
+local instruments = {}
+
 snd_sel = 1
-snd_names = {"cut","gain","pw","rel","fb","rate", "pan", "delay_pan"}
-snd_params = {"cutoff","gain","pw","release", "delay_feedback","delay_rate", "pan", "delay_pan"}
+snd_names = {"inst","amp","lpf","hpf","atk","dec","sus","rel","fb","rate", "pan", "delay_pan"}
+
+snd_params = {"mxsamples_instrument","mxsamples_amp","mxsamples_lpf_mxsamples","mxsamples_hpf_mxsamples","mxsamples_attack", "mxsamples_decay","mxsamples_sustain","mxsamples_release","delay_feedback","delay_rate", "mxsamples_pan", "delay_pan"}
+
 NUM_SND_PARAMS = #snd_params
 
 notes_off_metro = metro.init()
@@ -117,8 +124,9 @@ function build_scale()
 end
 
 function all_notes_off()
-  if (params:get("output") == 2 or params:get("output") == 3) then
+  if (params:get("output") <= 3) then
     for _, a in pairs(active_notes) do
+      skeys:off({name=params:get("mxsamples_instrument_txt"),midi=a})
       midi_out_device:note_off(a, nil, midi_out_channel)
     end
   end
@@ -156,7 +164,7 @@ function step()
       if math.random(100) <= params:get("probability") then
         -- Audio engine out
         if params:get("output") == 1 or params:get("output") == 3 then
-          engine.hz(freq)
+          skeys:on({name=params:get("mxsamples_instrument_txt"), midi=note_num, velocity=120})
         elseif params:get("output") == 4 then
           crow.output[1].volts = (note_num-60)/12
           crow.output[2].execute()
@@ -167,12 +175,14 @@ function step()
         -- MIDI out
         if (params:get("output") == 2 or params:get("output") == 3) then
           midi_out_device:note_on(note_num, 96, midi_out_channel)
+        end
+        
+        -- note off
+        if params:get("output") <= 3 then
           table.insert(active_notes, note_num)
-
-          --local note_off_time = 
           -- Note off timeout
           if params:get("note_length") < 4 then
-            notes_off_metro:start((60 / params:get("clock_tempo") / params:get("step_div")) * params:get("note_length"), 1)
+            notes_off_metro:start((60 / params:get("clock_tempo") / params:get("step_div")) * params:get("note_length") * 0.25, 1)
           end
         end
       end
@@ -199,6 +209,22 @@ function init()
   midi_out_device.event = function() end
   
   notes_off_metro.event = all_notes_off
+  
+  -- mx.samples init
+  local startup = true
+  instruments = skeys:list_instruments()
+  -- hidden text param for the instrument name because list IDs will change if instruments change
+  params:add_text("mxsamples_instrument_txt", "mxsamples_instrument_txt", "")
+  params:hide("mxsamples_instrument_txt")
+  
+  params:add{type = "option", id = "mxsamples_instrument", name = "instrument", options = instruments, 
+    action = function(value)
+      all_notes_off()
+      if not startup then
+        params:set("mxsamples_instrument_txt", instruments[value])
+      end
+    end
+  }
   
   params:add{type = "option", id = "output", name = "output",
     options = options.OUTPUT,
@@ -236,37 +262,26 @@ function init()
     action = function() build_scale() end}
   params:add{type = "number", id = "probability", name = "probability",
     min = 0, max = 100, default = 100,}
-  params:add_separator()
-
-  cs_AMP = controlspec.new(0,1,'lin',0,0.5,'')
-  params:add{type="control",id="amp",controlspec=cs_AMP,
-    action=function(x) engine.amp(x) end}
-
-  cs_PW = controlspec.new(0,100,'lin',0,50,'%')
-  params:add{type="control",id="pw",controlspec=cs_PW,
-    action=function(x) engine.pw(x/100) end}
-
-  cs_REL = controlspec.new(0.1,3.2,'lin',0,1.2,'s')
-  params:add{type="control",id="release",controlspec=cs_REL,
-    action=function(x) engine.release(x) end}
-
-  cs_CUT = controlspec.new(50,5000,'exp',0,800,'hz')
-  params:add{type="control",id="cutoff",controlspec=cs_CUT,
-    action=function(x) engine.cutoff(x) end}
-
-  cs_GAIN = controlspec.new(0,4,'lin',0,1,'')
-  params:add{type="control",id="gain",controlspec=cs_GAIN,
-    action=function(x) engine.gain(x) end}
-  
-  cs_PAN = controlspec.new(-1,1, 'lin',0,0,'')
-  params:add{type="control",id="pan",controlspec=cs_PAN,
-    action=function(x) engine.pan(x) end}
 
   hs.init()
   
   add_pattern_params()
   params:default()
 
+  -- set the instrument option param based on the text param value
+  local inst_txt = params:get("mxsamples_instrument_txt")
+  if inst_txt ~= "" then
+    for i = 1, #instruments do
+      if instruments[i] == inst_txt then
+        params:set("mxsamples_instrument", i)
+      end
+    end
+  else
+    params:set("mxsamples_instrument_txt", instruments[1])
+  end
+  
+  startup = false
+  
   clock.run(step)
 
   norns.enc.sens(1,8)
